@@ -1,0 +1,6 @@
+pip~=24.3.1
+attrs~=24.2.0
+wheel~=0.44.0
+protobuf~=5.28.3
+pillow~=11.0.0
+pygame~=2.6.1
