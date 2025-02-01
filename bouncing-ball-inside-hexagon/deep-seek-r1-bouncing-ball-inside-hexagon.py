@@ -1,123 +1,127 @@
 import pygame
 import math
-
-
-def closest_point_on_segment(A, B, P):
-    ax, ay = A
-    bx, by = B
-    px, py = P
-    abx = bx - ax
-    aby = by - ay
-    apx = px - ax
-    apy = py - ay
-
-    t = (apx * abx + apy * aby) / (abx ** 2 + aby ** 2 + 1e-8)
-    t = max(0, min(1, t))
-    return ax + t * abx, ay + t * aby
-
+from pygame.math import Vector2
 
 pygame.init()
-width, height = 800, 800
+
+# Screen settings
+width, height = 800, 600
 screen = pygame.display.set_mode((width, height))
 clock = pygame.time.Clock()
 
-# Parâmetros do hexágono
-cx, cy = width // 2, height // 2
-hex_radius = 300
-angle = 0
-angle_velocity = 0.5  # Rotação mais lenta (radianos/segundo)
+# Colors
+BLACK = (0, 0, 0)
+WHITE = (255, 255, 255)
+RED = (255, 0, 0)
 
-# Parâmetros da bola
-ball_radius = 20
-ball_x, ball_y = cx, cy - 200
-ball_vx, ball_vy = 0, 0
+# Hexagon parameters
+center = Vector2(width // 2, height // 2)
+hex_radius = 200
+rotation_speed = 1.5  # radians per second
 
-# Parâmetros físicos realistas
-gravity = 980  # Aproximadamente 9.8 m/s² (1 pixel = 1 cm)
-air_friction = 0.02
-cor = 0.8
-wall_friction = 0.2
+# Ball parameters
+ball_radius = 10
+ball_pos = Vector2(center.x, center.y - hex_radius + ball_radius + 20)
+ball_vel = Vector2(2, 0)  # Initial slight horizontal velocity
+gravity = Vector2(0, 500)
+friction_coeff = 0.85  # Energy retention after bounce
+air_friction = 0.999  # Air resistance factor
+
+
+def get_hexagon_vertices(center, radius, rotation):
+    """Generate hexagon vertices with current rotation"""
+    vertices = []
+    for i in range(6):
+        angle_rad = math.radians(60 * i) + rotation
+        x = center.x + radius * math.cos(angle_rad)
+        y = center.y + radius * math.sin(angle_rad)
+        vertices.append(Vector2(x, y))
+    return vertices
+
+
+def closest_point_on_segment(p, a, b):
+    """Find closest point on line segment a-b to point p"""
+    ap = p - a
+    ab = b - a
+    t = ap.dot(ab) / ab.dot(ab)
+    t = max(0, min(1, t))
+    return a + t * ab
+
 
 running = True
 while running:
-    dt = clock.tick(60) / 1000  # Delta time em segundos
+    dt = clock.tick(60) / 1000.0  # Delta time in seconds
 
+    # Event handling
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
 
-    # Atualização da rotação do hexágono
-    angle += angle_velocity * dt
-    angle %= 2 * math.pi
+    # Update hexagon rotation
+    current_rotation = pygame.time.get_ticks() * 0.001 * rotation_speed
 
-    # Atualização da física da bola
-    ball_vy += gravity * dt
-    ball_vx *= (1 - air_friction * dt)
-    ball_vy *= (1 - air_friction * dt)
-    ball_x += ball_vx * dt
-    ball_y += ball_vy * dt
+    # Apply physics to ball
+    ball_vel += gravity * dt
+    ball_vel *= air_friction ** (dt * 60)  # Adjust air friction for frame rate
+    ball_pos += ball_vel * dt
 
-    # Geração dos vértices do hexágono
-    vertices = []
-    for i in range(6):
-        theta = angle + math.radians(i * 60)
-        x = cx + hex_radius * math.cos(theta)
-        y = cy + hex_radius * math.sin(theta)
-        vertices.append((x, y))
+    # Get current hexagon vertices
+    vertices = get_hexagon_vertices(center, hex_radius, current_rotation)
 
-    # Detecção e resposta de colisão
+    # Collision detection and response
     collision_occurred = False
     for i in range(6):
-        p1 = vertices[i]
-        p2 = vertices[(i + 1) % 6]
+        if collision_occurred:
+            break
 
-        # Cálculo da normal interna da face
-        dx = p2[0] - p1[0]
-        dy = p2[1] - p1[1]
-        normal = (-dy, dx)
-        length = math.hypot(normal[0], normal[1])
-        if length == 0:
-            continue
-        normal = (normal[0] / length, normal[1] / length)
+        a = vertices[i]
+        b = vertices[(i + 1) % 6]
 
-        # Distância da bola até a face
-        distance = (ball_x - p1[0]) * normal[0] + (ball_y - p1[1]) * normal[1]
+        # Find closest point on the edge
+        closest = closest_point_on_segment(ball_pos, a, b)
+        to_ball = ball_pos - closest
+        distance = to_ball.length()
 
-        if distance <= ball_radius and not collision_occurred:
-            # Aqui tratamos a colisão como se a parede estivesse fixa,
-            # usando diretamente a velocidade da bola.
-            dot_product = ball_vx * normal[0] + ball_vy * normal[1]
+        if distance < ball_radius:
+            # Calculate edge normal
+            edge = b - a
+            normal = Vector2(edge.y, -edge.x).normalize()
 
-            if dot_product < 0:
-                new_normal = -cor * dot_product
-                tangent = (ball_vx - dot_product * normal[0],
-                           ball_vy - dot_product * normal[1])
+            # Ensure normal points inward
+            midpoint = (a + b) * 0.5
+            center_to_mid = center - midpoint
+            if normal.dot(center_to_mid) < 0:
+                normal = -normal
 
-                tangent_magnitude = math.hypot(tangent[0], tangent[1])
-                if tangent_magnitude > 0:
-                    tangent_normalized = (tangent[0] / tangent_magnitude,
-                                          tangent[1] / tangent_magnitude)
-                    tangent_scale = max(0, tangent_magnitude * (1 - wall_friction))
-                    tangent = (tangent_normalized[0] * tangent_scale,
-                               tangent_normalized[1] * tangent_scale)
-                else:
-                    tangent = (0, 0)
+            # Calculate wall velocity at collision point
+            rel_pos = closest - center
+            wall_vel = Vector2(-rotation_speed * rel_pos.y, rotation_speed * rel_pos.x)
 
-                ball_vx = new_normal * normal[0] + tangent[0]
-                ball_vy = new_normal * normal[1] + tangent[1]
+            # Calculate relative velocity
+            relative_vel = ball_vel - wall_vel
 
-                # Correção de posição para evitar penetração
+            # Reflect velocity with energy loss
+            normal_vel = relative_vel.dot(normal)
+            if normal_vel < 0:  # Only collide when moving towards the wall
+                tangent_vel = relative_vel - normal * normal_vel
+                relative_vel = tangent_vel - normal_vel * friction_coeff * normal
+                ball_vel = relative_vel + wall_vel
+
+                # Position correction
                 penetration = ball_radius - distance
-                ball_x += normal[0] * penetration
-                ball_y += normal[1] * penetration
+                ball_pos += normal * penetration * 1.1
 
                 collision_occurred = True
-                break
 
-    # Renderização
-    screen.fill((0, 0, 0))
-    pygame.draw.polygon(screen, (255, 255, 255), vertices, 2)
-    pygame.draw.circle(screen, (255, 0, 0), (int(ball_x), int(ball_y)), ball_radius)
+    # Drawing
+    screen.fill(BLACK)
+
+    # Draw hexagon
+    pygame.draw.polygon(screen, WHITE, [(v.x, v.y) for v in vertices], 2)
+
+    # Draw ball
+    pygame.draw.circle(screen, RED, (int(ball_pos.x), int(ball_pos.y)), ball_radius)
+
     pygame.display.flip()
 
 pygame.quit()
